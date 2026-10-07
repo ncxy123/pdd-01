@@ -135,6 +135,58 @@ def cmd_clean(args):
         print("  %s: %d 行" % (kind, n))
 
 
+def cmd_stats(args):
+    header, rows = read_rows(args.input)
+    good, _ = clean(rows)
+
+    os.makedirs(args.outdir, exist_ok=True)
+
+    by_first = Counter()
+    for row in good:
+        by_first[row[3].strip() or "(未填)"] += 1
+
+    total = len(good)
+    summary_path = os.path.join(args.outdir, "first_choice_summary.csv")
+    with open(summary_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["志愿1", "人数"])
+        for dept, n in by_first.most_common():
+            writer.writerow([dept, n])
+
+    print("清洗后 %d 人，按第一志愿分组：" % total)
+    for dept, n in by_first.most_common():
+        print("  %s: %d 人（%.1f%%）" % (dept, n, 100.0 * n / total))
+    print()
+
+    both = one = none = 0
+    for row in good:
+        has1 = bool(row[3].strip())
+        has2 = bool(row[4].strip())
+        if has1 and has2:
+            both += 1
+        elif has1 or has2:
+            one += 1
+        else:
+            none += 1
+
+    print("志愿填写情况：")
+    print("  两个都填了: %d 人" % both)
+    print("  只填了一个: %d 人" % one)
+    if none:
+        print("  两个都没填: %d 人" % none)
+    print()
+
+    cleaned_path = os.path.join(args.outdir, "cleaned.csv")
+    with open(cleaned_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        for row in good:
+            writer.writerow([cell.strip() for cell in row])
+
+    print("汇总表 -> %s" % summary_path)
+    print("干净数据 -> %s（%d 行）" % (cleaned_path, len(good)))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="招新报名数据处理小工具")
@@ -151,6 +203,13 @@ def build_parser():
     clean_cmd.add_argument("-o", "--outdir", default="output",
                            help="结果输出目录，默认 output")
     clean_cmd.set_defaults(func=cmd_clean)
+
+    stats = sub.add_parser("stats", help="按志愿统计并导出干净数据")
+    stats.add_argument("-i", "--input", default=DEFAULT_INPUT,
+                       help="报名表路径，默认 %s" % DEFAULT_INPUT)
+    stats.add_argument("-o", "--outdir", default="output",
+                       help="结果输出目录，默认 output")
+    stats.set_defaults(func=cmd_stats)
 
     return parser
 
