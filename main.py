@@ -3,11 +3,13 @@
 
 import argparse
 import csv
+import io
 import os
 import re
 from collections import Counter
 
 FIELDS = ["姓名", "学号", "邮箱", "志愿1", "志愿2", "推荐人"]
+REQUIRED = ["姓名", "学号", "邮箱", "志愿1"]
 DEFAULT_INPUT = "data/raw/recruit_raw.csv"
 EMAIL_DOMAIN = "smbu.edu.cn"
 
@@ -20,10 +22,23 @@ def col_index(header):
 
 
 def read_rows(path):
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        rows = [row for row in reader if row]
+    text = None
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            with open(path, newline="", encoding=encoding) as f:
+                text = f.read()
+            break
+        except UnicodeDecodeError:
+            continue
+        except OSError as e:
+            raise SystemExit("打不开 %s：%s" % (path, e))
+
+    if text is None:
+        raise SystemExit("读不了 %s：既不是 utf-8 也不是 GBK" % path)
+
+    reader = csv.reader(io.StringIO(text, newline=""))
+    header = next(reader, None)
+    rows = [row for row in reader if row]
     return header, rows
 
 
@@ -65,7 +80,9 @@ def cmd_overview(args):
 def validate(rows, idx):
     lines_of = {}
     for offset, row in enumerate(rows):
-        lines_of.setdefault(cell(row, idx["学号"]).strip(), []).append(offset + 2)
+        sid = cell(row, idx["学号"]).strip()
+        if sid:
+            lines_of.setdefault(sid, []).append(offset + 2)
 
     problems = []
     for offset, row in enumerate(rows):
@@ -74,26 +91,32 @@ def validate(rows, idx):
         email = cell(row, idx["邮箱"]).strip()
         hit = []
 
-        if not re.fullmatch(r"[0-9]+", sid):
-            hit.append(("学号非纯数字",
-                        "学号「%s」不是纯数字" % cell(row, idx["学号"])))
+        missing = [name for name in REQUIRED if len(row) <= idx[name]]
+        if missing:
+            hit.append(("列数不足",
+                        "这行只有 %d 列，缺了「%s」，可能是漏填或者少打了个逗号"
+                        % (len(row), "、".join(missing))))
+        else:
+            if not re.fullmatch(r"[0-9]+", sid):
+                hit.append(("学号非纯数字",
+                            "学号「%s」不是纯数字" % cell(row, idx["学号"])))
 
-        if email != sid + "@" + EMAIL_DOMAIN:
-            hit.append(("邮箱不匹配",
-                        "邮箱应为 %s@%s，实际填的是「%s」"
-                        % (sid, EMAIL_DOMAIN, cell(row, idx["邮箱"]))))
+            if email != sid + "@" + EMAIL_DOMAIN:
+                hit.append(("邮箱不匹配",
+                            "邮箱应为 %s@%s，实际填的是「%s」"
+                            % (sid, EMAIL_DOMAIN, cell(row, idx["邮箱"]))))
 
-        same = lines_of[sid]
-        if len(same) > 1:
-            if lineno == same[0]:
-                hit.append(("重复报名",
-                            "学号 %s 一共出现 %d 次（第 %s 行），本行保留"
-                            % (sid, len(same),
-                               "、".join(str(n) for n in same[1:]))))
-            else:
-                hit.append(("重复报名",
-                            "学号 %s 在第 %d 行已经报过，重复提交"
-                            % (sid, same[0])))
+            same = lines_of.get(sid, [])
+            if len(same) > 1:
+                if lineno == same[0]:
+                    hit.append(("重复报名",
+                                "学号 %s 一共出现 %d 次（第 %s 行），本行保留"
+                                % (sid, len(same),
+                                   "、".join(str(n) for n in same[1:]))))
+                else:
+                    hit.append(("重复报名",
+                                "学号 %s 在第 %d 行已经报过，重复提交"
+                                % (sid, same[0])))
 
         if hit:
             problems.append((lineno, row, hit))
