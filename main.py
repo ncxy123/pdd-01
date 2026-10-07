@@ -10,6 +10,7 @@ from collections import Counter
 
 FIELDS = ["姓名", "学号", "邮箱", "志愿1", "志愿2", "推荐人"]
 REQUIRED = ["姓名", "学号", "邮箱", "志愿1"]
+HARD_KINDS = {"列数不足", "学号非纯数字", "邮箱不匹配"}
 DEFAULT_INPUT = "data/raw/recruit_raw.csv"
 EMAIL_DOMAIN = "smbu.edu.cn"
 
@@ -78,11 +79,12 @@ def cmd_overview(args):
 
 
 def validate(rows, idx):
-    lines_of = {}
+    seen = {}
     for offset, row in enumerate(rows):
         sid = cell(row, idx["学号"]).strip()
         if sid:
-            lines_of.setdefault(sid, []).append(offset + 2)
+            seen.setdefault(sid, []).append(
+                (offset + 2, cell(row, idx["姓名"]).strip()))
 
     problems = []
     for offset, row in enumerate(rows):
@@ -106,17 +108,30 @@ def validate(rows, idx):
                             "邮箱应为 %s@%s，实际填的是「%s」"
                             % (sid, EMAIL_DOMAIN, cell(row, idx["邮箱"]))))
 
-            same = lines_of.get(sid, [])
-            if len(same) > 1:
-                if lineno == same[0]:
-                    hit.append(("重复报名",
-                                "学号 %s 一共出现 %d 次（第 %s 行），本行保留"
-                                % (sid, len(same),
-                                   "、".join(str(n) for n in same[1:]))))
+            group = seen.get(sid, [])
+            lines = [n for n, _ in group]
+            if len(group) > 1:
+                if len({name for _, name in group}) == 1:
+                    if lineno == lines[0]:
+                        hit.append(("重复报名",
+                                    "学号 %s 一共出现 %d 次（第 %s 行），本行保留"
+                                    % (sid, len(lines),
+                                       "、".join(str(n) for n in lines[1:]))))
+                    else:
+                        hit.append(("重复报名",
+                                    "学号 %s 在第 %d 行已经报过，重复提交"
+                                    % (sid, lines[0])))
+                elif lineno == lines[0]:
+                    others = "、".join("第 %d 行（%s）" % (n, name)
+                                       for n, name in group[1:])
+                    hit.append(("学号疑似填错",
+                                "学号 %s 还出现在 %s，姓名对不上，本行保留，"
+                                "建议人工核对" % (sid, others)))
                 else:
-                    hit.append(("重复报名",
-                                "学号 %s 在第 %d 行已经报过，重复提交"
-                                % (sid, same[0])))
+                    hit.append(("学号疑似填错",
+                                "学号 %s 在第 %d 行出现过，那边姓名是「%s」，"
+                                "两行姓名对不上，可能是学号填错"
+                                % (sid, lines[0], group[0][1])))
 
         if hit:
             problems.append((lineno, row, hit))
@@ -129,7 +144,7 @@ def clean(rows, idx):
 
     spoiled = set()
     for lineno, _, hit in problems:
-        if any(kind != "重复报名" for kind, _ in hit):
+        if any(kind in HARD_KINDS for kind, _ in hit):
             spoiled.add(lineno)
 
     good = []
