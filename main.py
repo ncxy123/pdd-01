@@ -7,9 +7,13 @@
 
 import argparse
 import csv
+import os
+import re
+from collections import Counter
 
 FIELDS = ["姓名", "学号", "邮箱", "志愿1", "志愿2", "推荐人"]
 DEFAULT_INPUT = "data/raw/recruit_raw.csv"
+EMAIL_DOMAIN = "smbu.edu.cn"
 
 
 def read_rows(path):
@@ -51,6 +55,91 @@ def cmd_overview(args):
             print("  %s 一模一样（%s）" % (where, rows[lines[0] - 2][0]))
 
 
+def validate(rows):
+    lines_of = {}
+    for offset, row in enumerate(rows):
+        lines_of.setdefault(row[1].strip(), []).append(offset + 2)
+
+    problems = []
+    for offset, row in enumerate(rows):
+        lineno = offset + 2
+        sid = row[1].strip()
+        email = row[2].strip()
+        hit = []
+
+        if not re.fullmatch(r"[0-9]+", sid):
+            hit.append(("学号非纯数字", "学号「%s」不是纯数字" % row[1]))
+
+        if email != sid + "@" + EMAIL_DOMAIN:
+            hit.append(("邮箱不匹配",
+                        "邮箱应为 %s@%s，实际填的是「%s」"
+                        % (sid, EMAIL_DOMAIN, row[2])))
+
+        same = lines_of[sid]
+        if len(same) > 1:
+            if lineno == same[0]:
+                hit.append(("重复报名",
+                            "学号 %s 一共出现 %d 次（第 %s 行），本行保留"
+                            % (sid, len(same),
+                               "、".join(str(n) for n in same[1:]))))
+            else:
+                hit.append(("重复报名",
+                            "学号 %s 在第 %d 行已经报过，重复提交"
+                            % (sid, same[0])))
+
+        if hit:
+            problems.append((lineno, row, hit))
+
+    return problems
+
+
+def clean(rows):
+    problems = validate(rows)
+
+    spoiled = set()
+    for lineno, _, hit in problems:
+        if any(kind != "重复报名" for kind, _ in hit):
+            spoiled.add(lineno)
+
+    good = []
+    seen = set()
+    for offset, row in enumerate(rows):
+        if offset + 2 in spoiled:
+            continue
+        sid = row[1].strip()
+        if sid in seen:
+            continue
+        seen.add(sid)
+        good.append(row)
+
+    return good, problems
+
+
+def cmd_clean(args):
+    header, rows = read_rows(args.input)
+    _, problems = clean(rows)
+
+    os.makedirs(args.outdir, exist_ok=True)
+    out = os.path.join(args.outdir, "problem_list.csv")
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["行号"] + header + ["问题类型", "问题说明"])
+        for lineno, row, hit in problems:
+            writer.writerow([lineno] + row
+                            + ["；".join(k for k, _ in hit),
+                               "；".join(why for _, why in hit)])
+
+    print("检查 %d 行，其中 %d 行有问题" % (len(rows), len(problems)))
+    print("问题清单已导出 -> %s" % out)
+    print()
+
+    # 按问题类型汇总一下，一行有多个毛病会分别计入
+    kinds = Counter(k for _, _, hit in problems for k, _ in hit)
+    print("按类型统计：")
+    for kind, n in kinds.most_common():
+        print("  %s: %d 行" % (kind, n))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="招新报名数据处理小工具")
@@ -60,6 +149,13 @@ def build_parser():
     overview.add_argument("-i", "--input", default=DEFAULT_INPUT,
                           help="报名表路径，默认 %s" % DEFAULT_INPUT)
     overview.set_defaults(func=cmd_overview)
+
+    clean_cmd = sub.add_parser("clean", help="校验数据，导出问题清单")
+    clean_cmd.add_argument("-i", "--input", default=DEFAULT_INPUT,
+                           help="报名表路径，默认 %s" % DEFAULT_INPUT)
+    clean_cmd.add_argument("-o", "--outdir", default="output",
+                           help="结果输出目录，默认 output")
+    clean_cmd.set_defaults(func=cmd_clean)
 
     return parser
 
