@@ -49,14 +49,16 @@ python make_sample_data.py
 
 随机种子是固定的，生成结果每次都一样。原始数据用 `utf-8-sig` 存，Excel 直接打开不会乱码。
 
-## 用法
-
-环境：Python 3.8 以上，无第三方依赖。
+## 需求 1：读入与概览
 
 ```bash
-# 需求 1：读入并打印概览
-# 需求 2：校验并导出问题清单
-# 需求 3：统计并导出干净数据
+python main.py overview
+```
+
+默认读 `data/raw/recruit_raw.csv`，可以 `-i` 换成别的文件：
+
+```bash
+python main.py overview -i 我的报名表.csv
 ```
 
 ## 边界假设
