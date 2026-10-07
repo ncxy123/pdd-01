@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""用法：
-    python main.py overview
-    python main.py overview -i data/raw/recruit_raw.csv
-"""
 
 import argparse
 import csv
@@ -16,20 +12,27 @@ DEFAULT_INPUT = "data/raw/recruit_raw.csv"
 EMAIL_DOMAIN = "smbu.edu.cn"
 
 
-def read_rows(path):
-    """读报名表
+def col_index(header):
+    for name in FIELDS:
+        if name not in header:
+            raise SystemExit("报名表里找不到「%s」这一列，确认一下选的文件对不对" % name)
+    return {name: header.index(name) for name in FIELDS}
 
-    :return: 表头, 数据行
-    """
+
+def read_rows(path):
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         header = next(reader, None)
-        rows = [row for row in reader if row]   # 末尾的空行不算数据
+        rows = [row for row in reader if row]
     return header, rows
 
 
 def is_blank(value):
     return value.strip() == ""
+
+
+def cell(row, i):
+    return row[i] if i < len(row) else ""
 
 
 def cmd_overview(args):
@@ -59,25 +62,26 @@ def cmd_overview(args):
             print("  %s 一模一样（%s）" % (where, rows[lines[0] - 2][0]))
 
 
-def validate(rows):
+def validate(rows, idx):
     lines_of = {}
     for offset, row in enumerate(rows):
-        lines_of.setdefault(row[1].strip(), []).append(offset + 2)
+        lines_of.setdefault(cell(row, idx["学号"]).strip(), []).append(offset + 2)
 
     problems = []
     for offset, row in enumerate(rows):
         lineno = offset + 2
-        sid = row[1].strip()
-        email = row[2].strip()
+        sid = cell(row, idx["学号"]).strip()
+        email = cell(row, idx["邮箱"]).strip()
         hit = []
 
         if not re.fullmatch(r"[0-9]+", sid):
-            hit.append(("学号非纯数字", "学号「%s」不是纯数字" % row[1]))
+            hit.append(("学号非纯数字",
+                        "学号「%s」不是纯数字" % cell(row, idx["学号"])))
 
         if email != sid + "@" + EMAIL_DOMAIN:
             hit.append(("邮箱不匹配",
                         "邮箱应为 %s@%s，实际填的是「%s」"
-                        % (sid, EMAIL_DOMAIN, row[2])))
+                        % (sid, EMAIL_DOMAIN, cell(row, idx["邮箱"]))))
 
         same = lines_of[sid]
         if len(same) > 1:
@@ -97,8 +101,8 @@ def validate(rows):
     return problems
 
 
-def clean(rows):
-    problems = validate(rows)
+def clean(rows, idx):
+    problems = validate(rows, idx)
 
     spoiled = set()
     for lineno, _, hit in problems:
@@ -110,7 +114,7 @@ def clean(rows):
     for offset, row in enumerate(rows):
         if offset + 2 in spoiled:
             continue
-        sid = row[1].strip()
+        sid = cell(row, idx["学号"]).strip()
         if sid in seen:
             continue
         seen.add(sid)
@@ -121,7 +125,8 @@ def clean(rows):
 
 def cmd_clean(args):
     header, rows = read_rows(args.input)
-    _, problems = clean(rows)
+    idx = col_index(header)
+    _, problems = clean(rows, idx)
 
     os.makedirs(args.outdir, exist_ok=True)
     out = os.path.join(args.outdir, "problem_list.csv")
@@ -137,7 +142,6 @@ def cmd_clean(args):
     print("问题清单已导出 -> %s" % out)
     print()
 
-    # 按问题类型汇总一下，一行有多个毛病会分别计入
     kinds = Counter(k for _, _, hit in problems for k, _ in hit)
     print("按类型统计：")
     for kind, n in kinds.most_common():
@@ -146,14 +150,14 @@ def cmd_clean(args):
 
 def cmd_stats(args):
     header, rows = read_rows(args.input)
-    good, _ = clean(rows)
+    idx = col_index(header)
+    good, _ = clean(rows, idx)
 
     os.makedirs(args.outdir, exist_ok=True)
 
-    # 第一志愿分组，志愿空着的归到「(未填)」，免得统计里少人
     by_first = Counter()
     for row in good:
-        by_first[row[3].strip() or "(未填)"] += 1
+        by_first[cell(row, idx["志愿1"]).strip() or "(未填)"] += 1
 
     total = len(good)
     summary_path = os.path.join(args.outdir, "first_choice_summary.csv")
@@ -170,8 +174,8 @@ def cmd_stats(args):
 
     both = one = none = 0
     for row in good:
-        has1 = bool(row[3].strip())
-        has2 = bool(row[4].strip())
+        has1 = bool(cell(row, idx["志愿1"]).strip())
+        has2 = bool(cell(row, idx["志愿2"]).strip())
         if has1 and has2:
             both += 1
         elif has1 or has2:
